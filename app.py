@@ -14,7 +14,9 @@ top_after_hours_df = top_after_hours_df.drop_duplicates(subset=['Ticker', 'Date'
 top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Change'])
 
 # App setup
+
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server
 app.title = "Earnings Event Dashboard"
 
 # Layout
