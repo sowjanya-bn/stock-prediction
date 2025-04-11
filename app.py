@@ -17,11 +17,11 @@ top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Chang
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
-app.title = "Earnings Event Dashboard"
+app.title = "After Hours Stock Analysis Dashboard"
 
 # Layout
 app.layout = dbc.Container([
-    html.H1("Earnings Event Interactive Dashboard", className="text-center my-4"),
+    html.H1("After Hours Stock Analysis Dashboard", className="text-center my-4"),
 
 
     dcc.Tabs([
