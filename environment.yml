@@ -3,5 +3,17 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - kaggle
+  - python=3.10
+  - pandas
+  - plotly
+  - dash
+  - dash-bootstrap-components
+  - jupyter
+  - jupyterlab
+  - jupyter-dash
   - ipykernel
+  - kaggle
+  - pip
+  - pip
+  - pip:
+      - gunicorn

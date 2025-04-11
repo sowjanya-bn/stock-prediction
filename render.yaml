@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: stock-dashboard
+    env: conda
+    plan: free
+    buildCommand: conda env update -f environment.yml
+    startCommand: gunicorn merged_app:app
