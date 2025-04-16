@@ -143,58 +143,79 @@ app.layout = dbc.Container([
         ])
         ]),
         dcc.Tab(label="Model Performance", children=[
-            html.Br(),
-            html.Div([
-                html.H3("Model Evaluation over 40+ Top Tickers"),
-                dcc.RadioItems(
-                    id="global-model-selector",
-                    options=[
-                        {"label": "Random Forest", "value": "Random Forest"},
-                        {"label": "XGBoost", "value": "XGBoost"},
-                        {"label": "LSTM", "value": "LSTM"}
-                    ],
-                    value="XGBoost",
-                    labelStyle={"display": "inline-block", "marginRight": "20px"}
-                ),
-                dcc.Graph(id="global-model-plot"),
-                html.Br(),
-                html.H3("Window Based Comparison:"),
-                dbc.Row([
-                    dbc.Col([
-                        html.Label("Filter by Model"),
-                        dcc.Dropdown(
-                            id="filter-model",
-                            options=[{"label": m, "value": m} for m in model_comparison_df["Model"].unique()],
-                            placeholder="Select a model",
-                            clearable=True
-                        )
-                    ], width=3),
+                    html.Br(),
+                    html.Div([
+                        html.H3("Model Evaluation over 40+ Top Tickers"),
+                        dcc.RadioItems(
+                            id="global-model-selector",
+                            options=[
+                                {"label": "Random Forest", "value": "Random Forest"},
+                                {"label": "XGBoost", "value": "XGBoost"},
+                                {"label": "LSTM", "value": "LSTM"}
+                            ],
+                            value="XGBoost",
+                            labelStyle={"display": "inline-block", "marginRight": "20px"}
+                        ),
+                        dcc.Graph(id="global-model-plot"),
+                        html.Br(),
+                        html.H3("Window Based Comparison:"),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Filter by Model"),
+                                dcc.Dropdown(
+                                    id="filter-model",
+                                    options=[{"label": m, "value": m} for m in model_comparison_df["Model"].unique()],
+                                    placeholder="Select a model",
+                                    clearable=True
+                                )
+                            ], width=3),
 
-                    dbc.Col([
-                        html.Label("Filter by Window Size"),
-                        dcc.Dropdown(
-                            id="filter-window",
-                            options=[{"label": int(w), "value": int(w)} for w in model_comparison_df["Window"].unique()],
-                            placeholder="Select window size",
-                            clearable=True
-                        )
-                    ], width=3),
-                ], className="mb-3"),
-                html.Div(id="model-comparison-table"),
-                html.Label("Individual Ticker Evaluation Metric:"),
-                dcc.RadioItems(
-                    id="metric-selector",
-                    options=[
-                        {"label": "RMSE", "value": "RMSE"},
-                        {"label": "R² Score", "value": "R2"}
-                    ],
-                    value="RMSE",
-                    labelStyle={"display": "inline-block", "marginRight": "20px"}
-                ),
-                html.Hr()
-            ]),
-            dcc.Graph(id="model-performance-chart")
+                            dbc.Col([
+                                html.Label("Filter by Window Size"),
+                                dcc.Dropdown(
+                                    id="filter-window",
+                                    options=[{"label": int(w), "value": int(w)} for w in model_comparison_df["Window"].unique()],
+                                    placeholder="Select window size",
+                                    clearable=True
+                                )
+                            ], width=3),
+                        ], className="mb-3"),
+                        html.Div(id="model-comparison-table"),
+                        html.Label("Individual Ticker Evaluation Metric:"),
+                        dcc.RadioItems(
+                            id="metric-selector",
+                            options=[
+                                {"label": "RMSE", "value": "RMSE"},
+                                {"label": "R² Score", "value": "R2"}
+                            ],
+                            value="RMSE",
+                            labelStyle={"display": "inline-block", "marginRight": "20px"}
+                        ),
+                        html.Hr()
+                    ]),
+                    dcc.Graph(id="model-performance-chart")
+                ]),
+                dcc.Tab(label="Model Strategy Insights", children=[
+            html.Br(),
+            html.H3("🔍 Model-Informed Trade Strategy Viewer"),
+            
+            html.Label("Confidence Threshold"),
+            dcc.Slider(
+                id="confidence-threshold",
+                min=0.5, max=1.0, step=0.01,
+                value=0.7,
+                marks={i/10: f"{i/10:.1f}" for i in range(5, 11)},
+                tooltip={"placement": "bottom", "always_visible": True}
+            ),
+            html.Br(),
+
+            html.Label("Number of Top Strategies to Display"),
+            dcc.Input(id="top-n-strategies", type="number", min=1, value=10, style={'width': '100px'}),
+
+            html.Br(), html.Br(),
+            html.Div(id="strategy-output-table")
         ])
+
 
     ])
 ], fluid=True)
@@ -449,6 +470,104 @@ def update_model_comparison_table(selected_model, selected_window):
         },
         style_table={"overflowX": "auto"},
         page_size=10,
+        sort_action="native"
+    )
+
+
+from dash import dash_table
+import numpy as np
+
+@app.callback(
+    Output("strategy-output-table", "children"),
+    Input("confidence-threshold", "value"),
+    Input("top-n-strategies", "value")
+)
+def generate_strategy_table(confidence_threshold, top_n):
+    df = pd.read_csv("strategy_df_window7.csv")
+
+    # === Setup ===
+    df['Target'] = (df['Next_Day_Open'] > df['Close']).astype(int)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df['Earnings_Date'] = pd.to_datetime(df['Earnings_Date'])
+
+    safe_features = [
+        'EPS_Actual', 'EPS_Estimate', 'EPS_Surprise', 'EPS_Surprise_%',
+        'Days_From_Earnings', 'Regular_Change%'
+    ]
+    df_clean = df.dropna(subset=safe_features + ['Target'])
+
+    X = df_clean[safe_features]
+    y = df_clean['Target']
+
+    # === Retrain ===
+    from xgboost import XGBClassifier
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+    model = XGBClassifier(
+        learning_rate=0.01, max_depth=5, n_estimators=100, subsample=0.8,
+        use_label_encoder=False, eval_metric='logloss', random_state=42
+    )
+    model.fit(X_train, y_train)
+
+    # === Predictions ===
+    df_test = df_clean.iloc[X_test.index].copy()
+    df_test["Predicted_Prob_Gain"] = model.predict_proba(X_test)[:, 1]
+    df_test["Predicted_Label"] = model.predict(X_test)
+
+    confident = df_test[df_test["Predicted_Prob_Gain"] > confidence_threshold].copy()
+    confident["Buy_Date"] = confident["Date"]
+    confident["Sell_Date"] = confident["Date"] + pd.Timedelta(days=1)
+    confident["Buy_Price"] = confident["Close"]
+    confident["Sell_Price"] = confident["Next_Day_Open"]
+    confident["Return_%"] = (confident["Sell_Price"] - confident["Buy_Price"]) / confident["Buy_Price"] * 100
+
+    def classify_signal(row):
+        ah = row.get("After_Hours_Change%", 0)
+        reg = row.get("Regular_Change%", 0)
+        if ah > reg: return "After_Hours"
+        elif reg > ah: return "Regular"
+        else: return "Mixed"
+
+    confident["Signal_Type"] = confident.apply(classify_signal, axis=1)
+
+    strategy_rows = []
+    for edate, group in confident.groupby("Earnings_Date"):
+        group = group.sort_values("Date")
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                buy = group.iloc[i]
+                sell = group.iloc[j]
+                strategy_rows.append({
+                    "Buy_Offset": (buy["Date"] - edate).days,
+                    "Buy_Signal_Type": buy["Signal_Type"],
+                    "Sell_Offset": (sell["Date"] - edate).days,
+                    "Sell_Signal_Type": sell["Signal_Type"],
+                    "Avg_Actual_Return": (sell["Next_Day_Open"] - buy["Close"]) / buy["Close"] * 100,
+                    "Avg_Predicted_Gain": buy["Predicted_Prob_Gain"]
+                })
+
+    if not strategy_rows:
+        return html.Div("⚠️ No trades found for this confidence level.")
+
+    strategy_df = pd.DataFrame(strategy_rows)
+    grouped = strategy_df.groupby([
+        "Buy_Offset", "Buy_Signal_Type", "Sell_Offset",  "Sell_Signal_Type"
+    ]).agg({
+        "Avg_Actual_Return": "mean",
+        "Avg_Predicted_Gain": "mean",
+        "Buy_Offset": "count"
+    }).rename(columns={"Buy_Offset": "Count"}).reset_index()
+
+    top_strategies = grouped.sort_values("Avg_Actual_Return", ascending=False).head(top_n)
+
+    return dash_table.DataTable(
+        columns=[{"name": col, "id": col} for col in top_strategies.columns],
+        data=top_strategies.to_dict("records"),
+        style_cell={"textAlign": "center", "padding": "5px"},
+        style_header={"backgroundColor": "#f2f2f2", "fontWeight": "bold"},
+        style_table={"overflowX": "auto"},
+        page_size=top_n,
         sort_action="native"
     )
 

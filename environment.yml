@@ -2,18 +2,26 @@ name: stock
 channels:
   - conda-forge
   - defaults
+
 dependencies:
   - python=3.10
   - pandas
+  - numpy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - xgboost
   - plotly
   - dash
   - dash-bootstrap-components
+  - dash-table
   - jupyter
   - jupyterlab
   - jupyter-dash
   - ipykernel
   - kaggle
-  - pip
+  - openpyxl   # For Excel support
   - pip
   - pip:
       - gunicorn
+      - dash-bootstrap-templates  # Optional: for prettier UI templates
