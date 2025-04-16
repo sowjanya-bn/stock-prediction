@@ -5,13 +5,26 @@ from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
 # Load both datasets
-df = pd.read_csv("event_df_cleaned.csv", parse_dates=["Earnings_Date", "Date"])
+df = pd.read_csv("event_df_enriched.csv", parse_dates=["Earnings_Date", "Date"])
 top_after_hours_df = pd.read_csv("top_after_hours_df.csv", parse_dates=["Date"])
 
 # Clean and prep after-hours dataset
 top_after_hours_df = top_after_hours_df.sort_values(by='Date')
 top_after_hours_df = top_after_hours_df.drop_duplicates(subset=['Ticker', 'Date'], keep='first')
 top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Change'])
+
+
+model_df = pd.read_csv("combined_model_performance.csv")
+
+global_results_df = pd.read_csv("global_model_predictions.csv")
+global_metrics_df = pd.read_csv("global_model_metrics.csv")
+
+# Load cumulative model performance data
+model_comparison_df = pd.read_csv("cumulative_result_df.csv")
+
+
+print("📌 Available Models:", global_metrics_df["Model"].unique())
+
 
 # App setup
 
@@ -128,7 +141,61 @@ app.layout = dbc.Container([
                 dcc.Graph(id="heatmap-chart")
             ])
         ])
+        ]),
+        dcc.Tab(label="Model Performance", children=[
+            html.Br(),
+            html.Div([
+                html.H3("Model Evaluation over 40+ Top Tickers"),
+                dcc.RadioItems(
+                    id="global-model-selector",
+                    options=[
+                        {"label": "Random Forest", "value": "Random Forest"},
+                        {"label": "XGBoost", "value": "XGBoost"},
+                        {"label": "LSTM", "value": "LSTM"}
+                    ],
+                    value="XGBoost",
+                    labelStyle={"display": "inline-block", "marginRight": "20px"}
+                ),
+                dcc.Graph(id="global-model-plot"),
+                html.Br(),
+                html.H3("Window Based Comparison:"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Filter by Model"),
+                        dcc.Dropdown(
+                            id="filter-model",
+                            options=[{"label": m, "value": m} for m in model_comparison_df["Model"].unique()],
+                            placeholder="Select a model",
+                            clearable=True
+                        )
+                    ], width=3),
+
+                    dbc.Col([
+                        html.Label("Filter by Window Size"),
+                        dcc.Dropdown(
+                            id="filter-window",
+                            options=[{"label": int(w), "value": int(w)} for w in model_comparison_df["Window"].unique()],
+                            placeholder="Select window size",
+                            clearable=True
+                        )
+                    ], width=3),
+                ], className="mb-3"),
+                html.Div(id="model-comparison-table"),
+                html.Label("Individual Ticker Evaluation Metric:"),
+                dcc.RadioItems(
+                    id="metric-selector",
+                    options=[
+                        {"label": "RMSE", "value": "RMSE"},
+                        {"label": "R² Score", "value": "R2"}
+                    ],
+                    value="RMSE",
+                    labelStyle={"display": "inline-block", "marginRight": "20px"}
+                ),
+                html.Hr()
+            ]),
+            dcc.Graph(id="model-performance-chart")
         ])
+
     ])
 ], fluid=True)
 
@@ -160,7 +227,7 @@ def update_price_movement(tickers):
 )
 def update_eps_impact(surprise_filter):
     dff = df[df["Days_From_Earnings"].between(-3, 3)]
-    dff = dff[dff["EPS_Surprise"] > 0] if surprise_filter == "positive" else dff[dff["EPS_Surprise"] <= 0]
+    dff = dff[dff["EPS_Surprise_Clean"] > 0] if surprise_filter == "positive" else dff[dff["EPS_Surprise_Clean"] <= 0]
     grouped = dff.groupby("Days_From_Earnings").agg({
         "Regular_Change%": "mean",
         "After_Hours_Change%": "mean"
@@ -192,28 +259,65 @@ def update_sector_charts(sectors):
     Input("heatmap-chart", "id")  # dummy trigger
 )
 def update_heatmap(_):
-    # Filter and group
-    heatmap_data = df[df["EPS_Surprise_Bin"] != "<=0%"]
-    grouped = heatmap_data.groupby(["Sector", "EPS_Surprise_Bin"]).agg({
-        "Regular_Change%": "mean"
+    # --- Bin EPS Surprise into meaningful categories ---
+    bins = [-float("inf"), 0, 5, 10, 20, float("inf")]
+    labels = ["<=0%", "0–5%", "5–10%", "10–20%", ">20%"]
+    df["EPS_Surprise_Bin"] = pd.cut(df["EPS_Surprise_%"], bins=bins, labels=labels)
+
+    # --- Group by Sector and Surprise Bin ---
+    grouped = df.groupby(["Sector", "EPS_Surprise_Bin"]).agg({
+        "Regular_Change%": "mean",
+        "After_Hours_Change%": "mean"
     }).reset_index()
 
-    # Ensure bin order
-    bin_order = ['>0%', '>5%', '>10%']
-    grouped["EPS_Surprise_Bin"] = pd.Categorical(grouped["EPS_Surprise_Bin"], categories=bin_order, ordered=True)
+    # Ensure consistent bin order
+    grouped["EPS_Surprise_Bin"] = pd.Categorical(grouped["EPS_Surprise_Bin"], categories=labels, ordered=True)
 
-    # Pivot for heatmap
-    pivoted = grouped.pivot(index="Sector", columns="EPS_Surprise_Bin", values="Regular_Change%")
+    # --- Pivot for heatmaps ---
+    pivot_regular = grouped.pivot(index="Sector", columns="EPS_Surprise_Bin", values="Regular_Change%")
+    pivot_afterhours = grouped.pivot(index="Sector", columns="EPS_Surprise_Bin", values="After_Hours_Change%")
 
-    # Plot
-    fig = px.imshow(
-        pivoted,
-        text_auto=True,
-        color_continuous_scale="Greens",
-        aspect="auto",
-        title="Sector-wise Avg Return by EPS Surprise Bin"
+    # --- Plot side-by-side heatmaps ---
+    import plotly.subplots as sp
+    import plotly.express as px
+
+    fig = sp.make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Regular Hours Return (%)", "After-Hours Return (%)"),
+        shared_yaxes=True
     )
-    fig.update_layout(xaxis_title="EPS Surprise Bin", yaxis_title="Sector")
+
+    # Create heatmaps with fixed color scale range
+    heatmap1 = px.imshow(
+        pivot_regular,
+        text_auto=True,
+        color_continuous_scale="RdYlGn",
+        aspect="auto",
+        zmin=-5, zmax=5
+    )
+    heatmap2 = px.imshow(
+        pivot_afterhours,
+        text_auto=True,
+        color_continuous_scale="RdYlGn",
+        aspect="auto",
+        zmin=-5, zmax=5
+    )
+
+    # Add both to subplot
+    for trace in heatmap1.data:
+        fig.add_trace(trace, row=1, col=1)
+    for trace in heatmap2.data:
+        fig.add_trace(trace, row=1, col=2)
+
+    # Final layout
+    fig.update_layout(
+        title="Sector-wise Avg Return by EPS Surprise Bin",
+        height=600,
+        width=1100,
+        coloraxis_colorbar=dict(title="Return (%)"),
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+
     return fig
 
 
@@ -260,6 +364,96 @@ def update_line_chart(ticker):
         return px.line(title="Select a ticker to see Close Price Trend")
     df_ticker = top_after_hours_df[top_after_hours_df['Ticker'] == ticker]
     return px.line(df_ticker, x='Date', y='Close', title=f"{ticker} Close Price Over Time")
+
+@app.callback(
+    Output("model-performance-chart", "figure"),
+    Input("metric-selector", "value")
+)
+def update_model_chart(selected_metric):
+    if selected_metric not in ["RMSE", "R2"]:
+        selected_metric = "RMSE"
+    
+    fig = px.bar(
+        model_df,
+        x="Ticker",
+        y=selected_metric,
+        color="Model",
+        barmode="group",
+        title=f"📊 {selected_metric} Comparison Across Models",
+        height=500
+    )
+    return fig
+
+@app.callback(
+    Output("global-model-plot", "figure"),
+    Input("global-model-selector", "value")
+)
+def update_global_model_tab(selected_model):
+
+    print("📌 Selected:", selected_model)
+
+    model_df = global_results_df[global_results_df["Model"] == selected_model]
+    #metrics_row = global_metrics_df[global_metrics_df["Model"] == selected_model.capitalize()].iloc[0]
+    # Filter the DataFrame
+    filtered = global_metrics_df[global_metrics_df["Model"] == selected_model]
+
+    # Check if we have any results
+    if filtered.empty:
+        return go.Figure(), html.Div("⚠️ No metrics found for this model.")
+
+    # Safe access
+    metrics_row = filtered.iloc[0]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        y=model_df["True"], mode="lines", name="Actual", line=dict(color="black")
+    ))
+    fig.add_trace(go.Scatter(
+        y=model_df["Predicted"], mode="lines", name="Predicted",
+        line=dict(color="green" if selected_model == "rf" else "blue")
+    ))
+
+    fig.update_layout(
+        title=f"{selected_model.upper()} | 📉 RMSE: {metrics_row['RMSE']:.4f} | 📈 R² Score: {metrics_row['R2']:.4f}",
+        title_x=0.5,
+        margin=dict(t=80)
+    )
+
+    return fig
+
+from dash import dash_table
+
+@app.callback(
+    Output("model-comparison-table", "children"),
+    Input("filter-model", "value"),
+    Input("filter-window", "value")
+)
+def update_model_comparison_table(selected_model, selected_window):
+    filtered_df = model_comparison_df.copy()
+
+    if selected_model:
+        filtered_df = filtered_df[filtered_df["Model"] == selected_model]
+    if selected_window:
+        filtered_df = filtered_df[filtered_df["Window"] == selected_window]
+
+    return dash_table.DataTable(
+        columns=[{"name": col, "id": col} for col in filtered_df.columns],
+        data=filtered_df.to_dict("records"),
+        style_cell={
+            "textAlign": "center",
+            "padding": "5px",
+        },
+        style_header={
+            "backgroundColor": "lightgrey",
+            "fontWeight": "bold"
+        },
+        style_table={"overflowX": "auto"},
+        page_size=10,
+        sort_action="native"
+    )
+
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
