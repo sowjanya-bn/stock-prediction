@@ -197,8 +197,24 @@ app.layout = dbc.Container([
                 ]),
                 dcc.Tab(label="Model Strategy Insights", children=[
             html.Br(),
-            html.H3("🔍 Model-Informed Trade Strategy Viewer"),
-            
+            html.H3("Model-Informed Trade Strategy Viewer"),
+            html.Div([
+            html.H5("Model Configuration", className="my-2"),
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Ul([
+                            html.Li("Model: XGBoostClassifier"),
+                            html.Li("Learning Rate: 0.01"),
+                            html.Li("Max Depth: 5"),
+                            html.Li("N Estimators: 100"),
+                            html.Li(f"Window Size: {7} Days both ways"),
+                            html.Li(f"Training Size: 23809 "),
+                            html.Li(f"Testing Size: 10205")
+                        ])
+                    ])
+                ])
+            ]),
+
             html.Label("Confidence Threshold"),
             dcc.Slider(
                 id="confidence-threshold",
