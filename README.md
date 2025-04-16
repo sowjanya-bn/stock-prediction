@@ -1,16 +1,16 @@
 # stock-prediction
-# 📊 Earnings Dashboard (Dash + Plotly)
+# Earnings Dashboard (Dash + Plotly)
 
 An interactive dashboard to explore earnings events, EPS surprises, and after-hours stock movements — built using Python, Dash, Plotly, and Pandas.
 
 ---
 
-## 🚀 Features
+## Features
 
-- 📈 Event Analysis: price movements, EPS surprise impact, sector breakdowns, and heatmaps
-- 🔎 Comparative Analysis: Top after-hours movers across sectors and time
-- 💡 Fully interactive, filterable by date, sector, and ticker
-- 🌟 Powered by Dash & Plotly with Bootstrap styling
+- Event Analysis: price movements, EPS surprise impact, sector breakdowns, and heatmaps
+- Comparative Analysis: Top after-hours movers across sectors and time
+- Fully interactive, filterable by date, sector, and ticker
+- Powered by Dash & Plotly with Bootstrap styling
 
 ---
 
