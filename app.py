@@ -13,6 +13,35 @@ top_after_hours_df = top_after_hours_df.sort_values(by='Date')
 top_after_hours_df = top_after_hours_df.drop_duplicates(subset=['Ticker', 'Date'], keep='first')
 top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Change'])
 
+def enrich_eps_surprise_bins(df):
+    import pandas as pd
+
+    # Ensure numeric type
+    df["EPS_Surprise_%"] = pd.to_numeric(df["EPS_Surprise_%"], errors='coerce')
+
+    # Define bins and labels
+    bins = [-float("inf"), 0, 5, 10, 20, float("inf")]
+    labels = ["≤0%", "0–5%", "5–10%", "10–20%", ">20%"]
+
+    # Assign binned and clean labels
+    df["EPS_Surprise_Bin"] = pd.cut(df["EPS_Surprise_%"], bins=bins, labels=labels, include_lowest=True)
+    df["EPS_Surprise_Clean"] = df["EPS_Surprise_%"]  # keep the original float as clean
+
+    return df
+
+
+
+# Preload multiple event window DataFrames
+event_dfs = {
+    1: pd.read_csv("strategy_df_window1.csv", parse_dates=["Date", "Earnings_Date"]),
+    3: pd.read_csv("strategy_df_window3.csv", parse_dates=["Date", "Earnings_Date"]),
+    5: pd.read_csv("strategy_df_window5.csv", parse_dates=["Date", "Earnings_Date"]),
+    7: pd.read_csv("strategy_df_window7.csv", parse_dates=["Date", "Earnings_Date"]),
+    9: pd.read_csv("strategy_df_window9.csv", parse_dates=["Date", "Earnings_Date"]),
+}
+
+event_dfs = {k: enrich_eps_surprise_bins(v) for k, v in event_dfs.items()}
+
 
 model_df = pd.read_csv("combined_model_performance.csv")
 
@@ -38,7 +67,7 @@ app.layout = dbc.Container([
 
 
     dcc.Tabs([
-        dcc.Tab(label="Comparative Analysis", children=[
+        dcc.Tab(label="Top Movers", children=[
             dcc.Tabs([
             dcc.Tab(label="After-Hours Movers", children=[
                 html.Br(),
@@ -100,8 +129,19 @@ app.layout = dbc.Container([
         ])
         ]),
         dcc.Tab(label="Event Analysis", children=[
+            html.Br(),
+            html.Div([
+                html.Label("Window Size:"),
+                dcc.Dropdown(
+                    id="window-size-selector",
+                    options=[{"label": f"±{w} Days", "value": w} for w in event_dfs.keys()],
+                    value=3,
+                    clearable=False,
+                    style={"width": "200px"}
+                ),
+            ], style={"marginBottom": "20px"}),
             dcc.Tabs([
-            dcc.Tab(label="Price Movement (±3 Days)", children=[
+            dcc.Tab(label="Price Movement", children=[
                 html.Br(),
                 dcc.Dropdown(
                     id="ticker-filter",
@@ -241,121 +281,102 @@ app.layout = dbc.Container([
 
 @app.callback(
     Output("price-movement-chart", "figure"),
-    Input("ticker-filter", "value")
+    Input("ticker-filter", "value"),
+    Input("window-size-selector", "value")
 )
-def update_price_movement(tickers):
-    dff = df[df["Days_From_Earnings"].between(-3, 3)]
+def update_price_movement(tickers, window_size):
+    dff = event_dfs.get(window_size, event_dfs[3])
     if tickers:
         dff = dff[dff["Ticker"].isin(tickers)]
+
     grouped = dff.groupby("Days_From_Earnings").agg({
         "Regular_Change%": "mean",
         "After_Hours_Change%": "mean"
     }).reset_index()
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=grouped["Days_From_Earnings"], y=grouped["Regular_Change%"], mode="lines+markers", name="Regular Hours"))
     fig.add_trace(go.Scatter(x=grouped["Days_From_Earnings"], y=grouped["After_Hours_Change%"], mode="lines+markers", name="After Hours"))
     fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="Earnings Day")
-    fig.update_layout(title="Price Movement Around Earnings", xaxis_title="Days From Earnings", yaxis_title="Change (%)")
+    fig.update_layout(title=f"Price Movement Around Earnings (±{window_size} Days)", xaxis_title="Days From Earnings", yaxis_title="Change (%)")
     return fig
+
 @app.callback(
     Output("eps-impact-regular", "figure"),
     Output("eps-impact-afterhours", "figure"),
-    Input("surprise-filter", "value")
+    Input("surprise-filter", "value"),
+    Input("window-size-selector", "value")
 )
-def update_eps_impact(surprise_filter):
-    dff = df[df["Days_From_Earnings"].between(-3, 3)]
+def update_eps_impact(surprise_filter, window_size):
+    dff = event_dfs.get(window_size, event_dfs[3])
     dff = dff[dff["EPS_Surprise_Clean"] > 0] if surprise_filter == "positive" else dff[dff["EPS_Surprise_Clean"] <= 0]
+
     grouped = dff.groupby("Days_From_Earnings").agg({
         "Regular_Change%": "mean",
         "After_Hours_Change%": "mean"
     }).reset_index()
+
     fig1 = px.line(grouped, x="Days_From_Earnings", y="Regular_Change%", title="Regular Hours Change (%)")
     fig2 = px.line(grouped, x="Days_From_Earnings", y="After_Hours_Change%", title="After Hours Change (%)")
-    for fig in [fig1, fig2]: fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    for fig in [fig1, fig2]:
+        fig.add_vline(x=0, line_dash="dash", line_color="gray")
+
     return fig1, fig2
+
 
 @app.callback(
     Output("sector-regular", "figure"),
     Output("sector-afterhours", "figure"),
-    Input("sector-filter", "value")
+    Input("sector-filter", "value"),
+    Input("window-size-selector", "value")
 )
-def update_sector_charts(sectors):
-    dff = df[df["Days_From_Earnings"].between(-3, 3)]
-    if sectors: dff = dff[dff["Sector"].isin(sectors)]
+def update_sector_charts(sectors, window_size):
+    dff = event_dfs.get(window_size, event_dfs[3])
+    if sectors:
+        dff = dff[dff["Sector"].isin(sectors)]
+
     grouped = dff.groupby(["Days_From_Earnings", "Sector"]).agg({
         "Regular_Change%": "mean",
         "After_Hours_Change%": "mean"
     }).reset_index()
+
     fig1 = px.line(grouped, x="Days_From_Earnings", y="Regular_Change%", color="Sector", title="Regular Hours Change")
     fig2 = px.line(grouped, x="Days_From_Earnings", y="After_Hours_Change%", color="Sector", title="After Hours Change")
-    for fig in [fig1, fig2]: fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    for fig in [fig1, fig2]:
+        fig.add_vline(x=0, line_dash="dash", line_color="gray")
+
     return fig1, fig2
+
 
 @app.callback(
     Output("heatmap-chart", "figure"),
-    Input("heatmap-chart", "id")  # dummy trigger
+    Input("window-size-selector", "value")
 )
-def update_heatmap(_):
-    # --- Bin EPS Surprise into meaningful categories ---
+def update_heatmap(window_size):
+    dff = event_dfs.get(window_size, event_dfs[3])
+
     bins = [-float("inf"), 0, 5, 10, 20, float("inf")]
     labels = ["<=0%", "0–5%", "5–10%", "10–20%", ">20%"]
-    df["EPS_Surprise_Bin"] = pd.cut(df["EPS_Surprise_%"], bins=bins, labels=labels)
+    dff["EPS_Surprise_Bin"] = pd.cut(dff["EPS_Surprise_%"], bins=bins, labels=labels)
 
-    # --- Group by Sector and Surprise Bin ---
-    grouped = df.groupby(["Sector", "EPS_Surprise_Bin"]).agg({
+    grouped = dff.groupby(["Sector", "EPS_Surprise_Bin"]).agg({
         "Regular_Change%": "mean",
         "After_Hours_Change%": "mean"
     }).reset_index()
-
-    # Ensure consistent bin order
     grouped["EPS_Surprise_Bin"] = pd.Categorical(grouped["EPS_Surprise_Bin"], categories=labels, ordered=True)
 
-    # --- Pivot for heatmaps ---
     pivot_regular = grouped.pivot(index="Sector", columns="EPS_Surprise_Bin", values="Regular_Change%")
     pivot_afterhours = grouped.pivot(index="Sector", columns="EPS_Surprise_Bin", values="After_Hours_Change%")
 
-    # --- Plot side-by-side heatmaps ---
     import plotly.subplots as sp
-    import plotly.express as px
+    fig = sp.make_subplots(rows=1, cols=2, subplot_titles=("Regular Hours", "After-Hours"), shared_yaxes=True)
 
-    fig = sp.make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("Regular Hours Return (%)", "After-Hours Return (%)"),
-        shared_yaxes=True
-    )
+    fig.add_trace(px.imshow(pivot_regular, text_auto=True, color_continuous_scale="RdYlGn", zmin=-5, zmax=5).data[0], row=1, col=1)
+    fig.add_trace(px.imshow(pivot_afterhours, text_auto=True, color_continuous_scale="RdYlGn", zmin=-5, zmax=5).data[0], row=1, col=2)
 
-    # Create heatmaps with fixed color scale range
-    heatmap1 = px.imshow(
-        pivot_regular,
-        text_auto=True,
-        color_continuous_scale="RdYlGn",
-        aspect="auto",
-        zmin=-5, zmax=5
-    )
-    heatmap2 = px.imshow(
-        pivot_afterhours,
-        text_auto=True,
-        color_continuous_scale="RdYlGn",
-        aspect="auto",
-        zmin=-5, zmax=5
-    )
-
-    # Add both to subplot
-    for trace in heatmap1.data:
-        fig.add_trace(trace, row=1, col=1)
-    for trace in heatmap2.data:
-        fig.add_trace(trace, row=1, col=2)
-
-    # Final layout
-    fig.update_layout(
-        title="Sector-wise Avg Return by EPS Surprise Bin",
-        height=600,
-        width=1100,
-        coloraxis_colorbar=dict(title="Return (%)"),
-        margin=dict(l=20, r=20, t=60, b=20)
-    )
-
+    fig.update_layout(title=f"EPS Surprise Heatmap (±{window_size} Days)", height=600, width=1100)
     return fig
+
 
 
 @app.callback(
