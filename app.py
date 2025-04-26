@@ -3,6 +3,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import dash_table as news_table
+
+
 
 # Load both datasets
 df = pd.read_csv("event_df_enriched.csv", parse_dates=["Earnings_Date", "Date"])
@@ -12,6 +15,13 @@ top_after_hours_df = pd.read_csv("top_after_hours_df.csv", parse_dates=["Date"])
 top_after_hours_df = top_after_hours_df.sort_values(by='Date')
 top_after_hours_df = top_after_hours_df.drop_duplicates(subset=['Ticker', 'Date'], keep='first')
 top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Change'])
+
+# Load the news correlation dataset
+news_corr_df = pd.read_csv("after_hours_change_news_correlation_categorized.csv", parse_dates=["Date"])
+
+# Preprocess for safety
+news_corr_df = news_corr_df.dropna(subset=["Ticker", "Date", "After_Hours_Market_Change", "Category"])
+
 
 def enrich_eps_surprise_bins(df):
     import pandas as pd
@@ -127,6 +137,60 @@ app.layout = dbc.Container([
             ])
 
         ])
+        ]),
+        dcc.Tab(label="After-Hours News Correlation", children=[
+            html.Br(),
+
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Select Category"),
+                    dcc.Dropdown(
+                        id='news-category-dropdown',
+                        options=[{'label': c, 'value': c} for c in sorted(news_corr_df['Category'].unique())],
+                        placeholder="All Categories",
+                        clearable=True
+                    )
+                ], width=4),
+
+                dbc.Col([
+                    html.Label("Select Date Range"),
+                    dcc.DatePickerRange(
+                        id='news-date-range-picker',
+                        start_date=news_corr_df['Date'].min(),
+                        end_date=news_corr_df['Date'].max(),
+                        min_date_allowed=news_corr_df['Date'].min(),
+                        max_date_allowed=news_corr_df['Date'].max()
+                    )
+                ], width=6)
+            ], className="mb-4"),
+
+            dbc.Row([
+                dbc.Col(dcc.Graph(id='news-bar-chart'), width=6),
+                dbc.Col(dcc.Graph(id='news-histogram'), width=6)
+            ]),
+
+            html.Br(),
+            html.H4("🧾 News-Driven After-Hours Moves"),
+            dcc.Loading(
+                children=[
+                    news_table.DataTable(
+                        id='news-table',
+                        columns=[
+                            {"name": "Ticker", "id": "Ticker"},
+                            {"name": "Date", "id": "Date"},
+                            {"name": "After_Hours_Market_Change", "id": "After_Hours_Market_Change"},
+                            {"name": "Category", "id": "Category"},
+                            {"name": "Historical_Overview", "id": "Historical_Overview"}
+                        ],
+                        style_cell={'textAlign': 'left', 'padding': '5px'},
+                        style_header={'backgroundColor': 'lightblue', 'fontWeight': 'bold'},
+                        page_size=10,
+                        sort_action='native',
+                        filter_action='native',
+                    )
+                ],
+                type="circle"
+            )
         ]),
         dcc.Tab(label="Event Analysis", children=[
             html.Br(),
@@ -247,7 +311,7 @@ app.layout = dbc.Container([
                             html.Li("Learning Rate: 0.01"),
                             html.Li("Max Depth: 5"),
                             html.Li("N Estimators: 100"),
-                            html.Li(f"Window Size: {7} Days both ways"),
+                            html.Li(f"Window Size: +/-{7} Days"),
                             html.Li(f"Training Size: 23809 "),
                             html.Li(f"Testing Size: 10205")
                         ])
@@ -255,7 +319,7 @@ app.layout = dbc.Container([
                 ])
             ]),
 
-            html.Label("Confidence Threshold"),
+            html.Label("Model Confidence Threshold"),
             dcc.Slider(
                 id="confidence-threshold",
                 min=0.5, max=1.0, step=0.01,
@@ -581,7 +645,7 @@ def generate_strategy_table(confidence_threshold, top_n):
                     "Sell_Offset": (sell["Date"] - edate).days,
                     "Sell_Signal_Type": sell["Signal_Type"],
                     "Avg_Actual_Return": (sell["Next_Day_Open"] - buy["Close"]) / buy["Close"] * 100,
-                    "Avg_Predicted_Gain": buy["Predicted_Prob_Gain"]
+                    "Model_Confidence_Threshold": buy["Predicted_Prob_Gain"]
                 })
 
     if not strategy_rows:
@@ -592,7 +656,7 @@ def generate_strategy_table(confidence_threshold, top_n):
         "Buy_Offset", "Buy_Signal_Type", "Sell_Offset",  "Sell_Signal_Type"
     ]).agg({
         "Avg_Actual_Return": "mean",
-        "Avg_Predicted_Gain": "mean",
+        "Model_Confidence_Threshold": "mean",
         "Buy_Offset": "count"
     }).rename(columns={"Buy_Offset": "Count"}).reset_index()
 
@@ -609,6 +673,42 @@ def generate_strategy_table(confidence_threshold, top_n):
     )
 
 
+@app.callback(
+    Output('news-bar-chart', 'figure'),
+    Output('news-histogram', 'figure'),
+    Output('news-table', 'data'),
+    Input('news-category-dropdown', 'value'),
+    Input('news-date-range-picker', 'start_date'),
+    Input('news-date-range-picker', 'end_date')
+)
+def update_news_tab(selected_category, start_date, end_date):
+    dff = news_corr_df.copy()
+    dff = dff[(dff['Date'] >= pd.to_datetime(start_date)) & (dff['Date'] <= pd.to_datetime(end_date))]
+
+    if selected_category:
+        dff = dff[dff['Category'] == selected_category]
+
+    # Top Movers Bar Chart
+    top_movers = dff.nlargest(10, 'After_Hours_Market_Change')
+    bar_fig = px.bar(
+        top_movers,
+        x='Ticker',
+        y='After_Hours_Market_Change',
+        color='Category',
+        hover_data=['Historical_Overview'],
+        title="🔝 Top 10 After-Hours Moves by News Event"
+    )
+
+    # Histogram of all changes
+    hist_fig = px.histogram(
+        dff,
+        x='After_Hours_Market_Change',
+        nbins=30,
+        title="📊 Distribution of After-Hours Moves (%)",
+        marginal="box"
+    )
+
+    return bar_fig, hist_fig, dff.to_dict('records')
 
 
 if __name__ == "__main__":
