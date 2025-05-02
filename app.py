@@ -1,77 +1,41 @@
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, Input, Output, State
+from dash import Dash, dcc, html, Input, Output, State, dash_table
 import dash_bootstrap_components as dbc
+import numpy as np
 import dash_table as news_table
 
-
-
-# Load both datasets
+# === Load Datasets ===
 df = pd.read_csv("event_df_enriched.csv", parse_dates=["Earnings_Date", "Date"])
 top_after_hours_df = pd.read_csv("top_after_hours_df.csv", parse_dates=["Date"])
+top_after_hours_df = top_after_hours_df.sort_values("Date").drop_duplicates(["Ticker", "Date"]).dropna(subset=["After_Hours_Market_Change"])
 
-# Clean and prep after-hours dataset
-top_after_hours_df = top_after_hours_df.sort_values(by='Date')
-top_after_hours_df = top_after_hours_df.drop_duplicates(subset=['Ticker', 'Date'], keep='first')
-top_after_hours_df = top_after_hours_df.dropna(subset=['After_Hours_Market_Change'])
-
-# Load the news correlation dataset
 news_corr_df = pd.read_csv("after_hours_change_news_correlation_categorized.csv", parse_dates=["Date"])
-
-# Preprocess for safety
 news_corr_df = news_corr_df.dropna(subset=["Ticker", "Date", "After_Hours_Market_Change", "Category"])
 
-
+# === Helper Function ===
 def enrich_eps_surprise_bins(df):
-    import pandas as pd
-
-    # Ensure numeric type
     df["EPS_Surprise_%"] = pd.to_numeric(df["EPS_Surprise_%"], errors='coerce')
-
-    # Define bins and labels
     bins = [-float("inf"), 0, 5, 10, 20, float("inf")]
-    labels = ["≤0%", "0–5%", "5–10%", "10–20%", ">20%"]
-
-    # Assign binned and clean labels
+    labels = ["\u22640%", "0–5%", "5–10%", "10–20%", ">20%"]
     df["EPS_Surprise_Bin"] = pd.cut(df["EPS_Surprise_%"], bins=bins, labels=labels, include_lowest=True)
-    df["EPS_Surprise_Clean"] = df["EPS_Surprise_%"]  # keep the original float as clean
-
+    df["EPS_Surprise_Clean"] = df["EPS_Surprise_%"]
     return df
 
-
-
-# Preload multiple event window DataFrames
-event_dfs = {
-    1: pd.read_csv("strategy_df_window1.csv", parse_dates=["Date", "Earnings_Date"]),
-    3: pd.read_csv("strategy_df_window3.csv", parse_dates=["Date", "Earnings_Date"]),
-    5: pd.read_csv("strategy_df_window5.csv", parse_dates=["Date", "Earnings_Date"]),
-    7: pd.read_csv("strategy_df_window7.csv", parse_dates=["Date", "Earnings_Date"]),
-    9: pd.read_csv("strategy_df_window9.csv", parse_dates=["Date", "Earnings_Date"]),
-}
-
-event_dfs = {k: enrich_eps_surprise_bins(v) for k, v in event_dfs.items()}
-
-
+# === Load Strategy Data ===
+event_dfs = {w: enrich_eps_surprise_bins(pd.read_csv(f"strategy_df_window{w}.csv", parse_dates=["Date", "Earnings_Date"])) for w in [1, 3, 5, 7, 9]}
 model_df = pd.read_csv("combined_model_performance.csv")
-
 global_results_df = pd.read_csv("global_model_predictions.csv")
 global_metrics_df = pd.read_csv("global_model_metrics.csv")
-
-# Load cumulative model performance data
 model_comparison_df = pd.read_csv("cumulative_result_df.csv")
 
-
-print("📌 Available Models:", global_metrics_df["Model"].unique())
-
-
-# App setup
-
+# === App Setup ===
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
 app.title = "After Hours Stock Analysis Dashboard"
 
-# Layout
+# === Layout ===
 app.layout = dbc.Container([
     html.H1("After Hours Stock Analysis Dashboard", className="text-center my-4"),
 
@@ -341,8 +305,8 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 
-# === Callbacks for tabs ===
 
+# === Callbacks ===
 @app.callback(
     Output("price-movement-chart", "figure"),
     Input("ticker-filter", "value"),
@@ -543,7 +507,7 @@ def update_global_model_tab(selected_model):
 
     return fig
 
-from dash import dash_table
+
 
 @app.callback(
     Output("model-comparison-table", "children"),
@@ -575,8 +539,7 @@ def update_model_comparison_table(selected_model, selected_window):
     )
 
 
-from dash import dash_table
-import numpy as np
+
 
 @app.callback(
     Output("strategy-output-table", "children"),
@@ -711,5 +674,7 @@ def update_news_tab(selected_category, start_date, end_date):
     return bar_fig, hist_fig, dff.to_dict('records')
 
 
+
+# === Run Server ===
 if __name__ == "__main__":
     app.run(debug=True)
